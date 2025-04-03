@@ -77,7 +77,7 @@ app.get('/login', (req, res) => {
 });
 
 // Callback route - IMPORTANT: This must match your Spotify dashboard exactly
-app.get('/spotify-callback', async (req, res) => {
+app.get('/callback', async (req, res) => {
   console.log('Callback route accessed');
   
   const code = req.query.code || null;
