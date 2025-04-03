@@ -29,8 +29,8 @@ app.use(express.static(path.join(__dirname, '../')));
 // Spotify API credentials
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || 'http://localhost:3000/spotify-callback';
-const FRONTEND_URI = process.env.FRONTEND_URI || 'http://localhost:3000';
+const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || 'https://spotify-api-iota-one.vercel.app/callback';
+const FRONTEND_URI = process.env.FRONTEND_URI || 'https://hoachau.de';
 
 // Log configuration for debugging
 console.log('Spotify Configuration:');
