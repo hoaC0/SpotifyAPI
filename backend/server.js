@@ -1,13 +1,13 @@
+// server.js
 const express = require('express');
 const axios = require('axios');
 const querystring = require('querystring');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
-const fs = require('fs');
 require('dotenv').config();
 
-// Express app setup
+// Add request logging middleware
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -18,7 +18,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware setup
 app.use(express.json());
 app.use(cors({
   origin: ['https://hoachau.de', 'http://localhost:3000'], // Allow both production and local
@@ -45,68 +44,12 @@ const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 
-// Token persistence - For server-side auth, we'll save tokens to a file
-const TOKEN_FILE_PATH = path.join(__dirname, 'spotify-tokens.json');
-
-// Function to load tokens from file
-function loadTokens() {
-  try {
-    if (fs.existsSync(TOKEN_FILE_PATH)) {
-      const tokenData = JSON.parse(fs.readFileSync(TOKEN_FILE_PATH, 'utf8'));
-      console.log('Loaded tokens from file');
-      return tokenData;
-    }
-  } catch (error) {
-    console.error('Error loading tokens from file:', error);
-  }
-  return null;
-}
-
-// Function to save tokens to file
-function saveTokens(tokenData) {
-  try {
-    fs.writeFileSync(TOKEN_FILE_PATH, JSON.stringify(tokenData, null, 2));
-    console.log('Saved tokens to file');
-  } catch (error) {
-    console.error('Error saving tokens to file:', error);
-  }
-}
-
-// Initialize tokens from file
-let tokenData = loadTokens();
+// Store tokens (in memory for simplicity - in production use a proper database)
+let tokenData = null;
 
 // Login route
 app.get('/login', (req, res) => {
   console.log('Login route accessed');
-  
-  const state = generateRandomString(16);
-  console.log('Generated state:', state);
-  
-  res.cookie('spotify_auth_state', state);
-
-  const scope = [
-    'user-read-recently-played',
-    'user-top-read',
-    'user-read-currently-playing'
-  ].join(' ');
-
-  const queryParams = querystring.stringify({
-    response_type: 'code',
-    client_id: CLIENT_ID,
-    scope: scope,
-    redirect_uri: REDIRECT_URI,
-    state: state
-  });
-
-  const authUrl = `${SPOTIFY_AUTH_URL}?${queryParams}`;
-  console.log('Redirecting to Spotify auth URL:', authUrl);
-  
-  res.redirect(authUrl);
-});
-
-// Admin-only login route (you should protect this in production)
-app.get('/admin/spotify-login', (req, res) => {
-  console.log('Admin login route accessed');
   
   const state = generateRandomString(16);
   console.log('Generated state:', state);
@@ -186,10 +129,7 @@ app.get('/callback', async (req, res) => {
       expires_at: Date.now() + (response.data.expires_in * 1000)
     };
 
-    // Save tokens for persistence across server restarts
-    saveTokens(tokenData);
-
-    console.log('Token data stored in memory and file');
+    console.log('Token data stored in memory');
     console.log('Redirecting to frontend with success=true');
     
     res.redirect(`${FRONTEND_URI}?success=true`);
@@ -364,15 +304,11 @@ async function checkAndRefreshToken() {
         expires_at: Date.now() + (response.data.expires_in * 1000)
       };
       
-      // Save the refreshed tokens
-      saveTokens(tokenData);
-      
       console.log('Updated token data:');
       console.log('- Access token:', tokenData.access_token ? 'present' : 'missing');
       console.log('- Refresh token:', tokenData.refresh_token ? 'present' : 'missing');
       console.log('- Expires in:', tokenData.expires_in);
       console.log('- Expires at:', new Date(tokenData.expires_at).toISOString());
-      return true;
     } catch (error) {
       console.error('Error refreshing token:', error.message);
       if (error.response) {
@@ -381,11 +317,9 @@ async function checkAndRefreshToken() {
       }
       console.log('Setting token data to null due to refresh error');
       tokenData = null;
-      return false;
     }
   } else {
     console.log('Token still valid, no refresh needed');
-    return true;
   }
 }
 
