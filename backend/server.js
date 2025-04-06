@@ -9,7 +9,6 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB Connection
-// For security, you should move this to an environment variable
 const MONGODB_URI = `mongodb+srv://hoachau1010:KFNgjpacRTFb03zb@hoa.ixyra6m.mongodb.net/?retryWrites=true&w=majority&appName=hoa`;
 const DB_NAME = 'spotifydb';
 const COLLECTION_NAME = 'spotify_tokens';
