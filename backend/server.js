@@ -10,7 +10,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://your-username:your-password@cluster0.xxx.mongodb.net/spotifydb?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'spotifydb';
 const COLLECTION_NAME = 'spotify_tokens';
 const TOKEN_ID = 'main_spotify_token';
@@ -23,9 +23,10 @@ async function connectToMongoDB() {
   if (mongoClient) return mongoClient;
   
   try {
+    console.log('Connecting to MongoDB with URI:', MONGODB_URI);
     mongoClient = new MongoClient(MONGODB_URI);
     await mongoClient.connect();
-    console.log('Connected to MongoDB');
+    console.log('Successfully connected to MongoDB');
     return mongoClient;
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error);
@@ -40,12 +41,14 @@ async function loadTokenFromDB() {
     const db = client.db(DB_NAME);
     const collection = db.collection(COLLECTION_NAME);
     
+    console.log('Attempting to load tokens from database');
     const tokenDoc = await collection.findOne({ _id: TOKEN_ID });
     
     if (tokenDoc) {
-      console.log('Spotify tokens loaded from database');
+      console.log('Tokens found in database');
       return tokenDoc.tokenData;
     }
+    console.log('No tokens found in database');
     return null;
   } catch (error) {
     console.error('Error loading tokens from database:', error);
@@ -56,6 +59,9 @@ async function loadTokenFromDB() {
 // Function to save tokens to database
 async function saveTokenToDB(tokens) {
   try {
+    console.log('Attempting to save tokens to database');
+    console.log('Tokens:', JSON.stringify(tokens, null, 2));
+
     const client = await connectToMongoDB();
     const db = client.db(DB_NAME);
     const collection = db.collection(COLLECTION_NAME);
@@ -69,7 +75,7 @@ async function saveTokenToDB(tokens) {
       { upsert: true }
     );
     
-    console.log('Spotify tokens saved to database');
+    console.log('Tokens saved successfully to database');
   } catch (error) {
     console.error('Error saving tokens to database:', error);
   }
@@ -91,8 +97,8 @@ app.use(express.static(path.join(__dirname, '../')));
 // Spotify API credentials
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || 'https://spotify-api-iota-one.vercel.app/callback';
-const FRONTEND_URI = process.env.FRONTEND_URI || 'https://hoachau.de';
+const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI;
+const FRONTEND_URI = process.env.FRONTEND_URI;
 
 // Spotify API endpoints
 const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
@@ -115,6 +121,7 @@ async function refreshAccessToken() {
   }
 
   try {
+    console.log('Attempting to refresh access token');
     const response = await axios.post(
       SPOTIFY_TOKEN_URL,
       querystring.stringify({
