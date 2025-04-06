@@ -9,7 +9,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_URI = `mongodb+srv://hoachau1010:KFNgjpacRTFb03zb@hoa.1xyra5m.mongodb.net/spotifydb?retryWrites=true&w=majority&tlsAllowInvalidHostnames=true`;
 const DB_NAME = 'spotifydb';
 const COLLECTION_NAME = 'spotify_tokens';
 const TOKEN_ID = 'main_spotify_token';
