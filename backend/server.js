@@ -6,18 +6,19 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const { MongoClient } = require('mongodb');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://your-username:your-password@cluster0.xxx.mongodb.net/spotifydb?retryWrites=true&w=majority';
 const DB_NAME = 'spotifydb';
-const COLLECTION_NAME = 'tokens';
-const TOKEN_ID = 'main_token'; // Wir verwenden einen festen ID für den Token
+const COLLECTION_NAME = 'spotify_tokens';
+const TOKEN_ID = 'main_spotify_token';
 
 let mongoClient = null;
 let tokenData = null;
 
-// Funktion zum Verbinden mit MongoDB
+// Function to connect to MongoDB
 async function connectToMongoDB() {
   if (mongoClient) return mongoClient;
   
@@ -32,7 +33,7 @@ async function connectToMongoDB() {
   }
 }
 
-// Funktion zum Laden des Tokens aus der Datenbank
+// Function to load tokens from database
 async function loadTokenFromDB() {
   try {
     const client = await connectToMongoDB();
@@ -42,18 +43,18 @@ async function loadTokenFromDB() {
     const tokenDoc = await collection.findOne({ _id: TOKEN_ID });
     
     if (tokenDoc) {
-      console.log('Token from database loaded');
+      console.log('Spotify tokens loaded from database');
       return tokenDoc.tokenData;
     }
     return null;
   } catch (error) {
-    console.error('Error loading token from database:', error);
+    console.error('Error loading tokens from database:', error);
     return null;
   }
 }
 
-// Funktion zum Speichern des Tokens in der Datenbank
-async function saveTokenToDB(token) {
+// Function to save tokens to database
+async function saveTokenToDB(tokens) {
   try {
     const client = await connectToMongoDB();
     const db = client.db(DB_NAME);
@@ -61,13 +62,16 @@ async function saveTokenToDB(token) {
     
     await collection.updateOne(
       { _id: TOKEN_ID },
-      { $set: { tokenData: token, updatedAt: new Date() } },
+      { $set: { 
+        tokenData: tokens, 
+        updatedAt: new Date() 
+      } },
       { upsert: true }
     );
     
-    console.log('Token saved to database');
+    console.log('Spotify tokens saved to database');
   } catch (error) {
-    console.error('Error saving token to database:', error);
+    console.error('Error saving tokens to database:', error);
   }
 }
 
@@ -75,12 +79,7 @@ async function saveTokenToDB(token) {
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Add request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
-
+// Middleware
 app.use(express.json());
 app.use(cors({
   origin: ['https://hoachau.de', 'http://localhost:3000'],
@@ -100,19 +99,87 @@ const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 
-// Beim Serverstart den Token laden
+// Helper function to generate random string
+function generateRandomString(length) {
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  return Array.from(crypto.randomBytes(length))
+    .map((x) => possible[x % possible.length])
+    .join('');
+}
+
+// Helper function to get new access token using refresh token
+async function refreshAccessToken() {
+  if (!tokenData || !tokenData.refresh_token) {
+    console.error('No refresh token available');
+    return null;
+  }
+
+  try {
+    const response = await axios.post(
+      SPOTIFY_TOKEN_URL,
+      querystring.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: tokenData.refresh_token,
+        client_id: CLIENT_ID
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`
+        }
+      }
+    );
+
+    // Update tokens in memory and database
+    const newTokens = {
+      access_token: response.data.access_token,
+      // Keep the existing refresh token if not provided in the response
+      refresh_token: response.data.refresh_token || tokenData.refresh_token,
+      expires_at: Date.now() + (response.data.expires_in * 1000)
+    };
+
+    tokenData = newTokens;
+    await saveTokenToDB(newTokens);
+
+    console.log('Access token refreshed successfully');
+    return newTokens.access_token;
+  } catch (error) {
+    console.error('Error refreshing access token:', error.response ? error.response.data : error.message);
+    return null;
+  }
+}
+
+// Middleware to handle token refresh for Spotify API routes
+async function spotifyAuthMiddleware(req, res, next) {
+  // If no tokens exist, require authentication
+  if (!tokenData || !tokenData.refresh_token) {
+    return res.status(401).json({ error: 'Authentication required', requireLogin: true });
+  }
+
+  // Check if access token is expired or about to expire
+  if (!tokenData.expires_at || Date.now() >= tokenData.expires_at - 60000) {
+    try {
+      const newAccessToken = await refreshAccessToken();
+      if (!newAccessToken) {
+        return res.status(401).json({ error: 'Failed to refresh token', requireLogin: true });
+      }
+    } catch (error) {
+      return res.status(401).json({ error: 'Authentication failed', requireLogin: true });
+    }
+  }
+
+  next();
+}
+
+// On server startup, load existing tokens
 (async () => {
   try {
     tokenData = await loadTokenFromDB();
     if (tokenData) {
-      console.log('Token loaded on startup. Expires at:', new Date(tokenData.expires_at).toISOString());
-      
-      // Überprüfen, ob der Token erneuert werden muss
-      if (Date.now() >= tokenData.expires_at - 60000) {
-        console.log('Token expired or about to expire. Will refresh on first API call.');
-      }
+      console.log('Tokens loaded on startup');
+      console.log('Refresh token:', tokenData.refresh_token ? 'present' : 'missing');
     } else {
-      console.log('No token found in database. Waiting for authentication.');
+      console.log('No tokens found in database');
     }
   } catch (error) {
     console.error('Error during startup token loading:', error);
@@ -121,11 +188,7 @@ const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 
 // Login route
 app.get('/login', (req, res) => {
-  console.log('Login route accessed');
-  
   const state = generateRandomString(16);
-  console.log('Generated state:', state);
-  
   res.cookie('spotify_auth_state', state);
 
   const scope = [
@@ -139,37 +202,26 @@ app.get('/login', (req, res) => {
     client_id: CLIENT_ID,
     scope: scope,
     redirect_uri: REDIRECT_URI,
-    state: state
+    state: state,
+    show_dialog: true  // Always show login dialog
   });
 
-  const authUrl = `${SPOTIFY_AUTH_URL}?${queryParams}`;
-  console.log('Redirecting to Spotify auth URL:', authUrl);
-  
-  res.redirect(authUrl);
+  res.redirect(`${SPOTIFY_AUTH_URL}?${queryParams}`);
 });
 
 // Callback route
 app.get('/callback', async (req, res) => {
-  console.log('Callback route accessed');
-  
   const code = req.query.code || null;
   const state = req.query.state || null;
   const storedState = req.cookies ? req.cookies.spotify_auth_state : null;
 
-  console.log('Received code from Spotify:', code ? 'Yes' : 'No');
-  console.log('State match:', state === storedState);
-
   if (state === null || state !== storedState) {
-    console.log('State mismatch! Redirecting with error.');
-    res.redirect(`${FRONTEND_URI}?error=state_mismatch`);
-    return;
+    return res.redirect(`${FRONTEND_URI}?error=state_mismatch`);
   }
 
   res.clearCookie('spotify_auth_state');
 
   try {
-    console.log('Exchanging code for token...');
-    
     const response = await axios.post(
       SPOTIFY_TOKEN_URL,
       querystring.stringify({
@@ -185,240 +237,84 @@ app.get('/callback', async (req, res) => {
       }
     );
 
-    console.log('Token exchange successful!');
-
-    tokenData = {
+    // Store all token information
+    const newTokens = {
       access_token: response.data.access_token,
       refresh_token: response.data.refresh_token,
-      expires_in: response.data.expires_in,
       expires_at: Date.now() + (response.data.expires_in * 1000)
     };
 
-    // Token in der Datenbank speichern
-    await saveTokenToDB(tokenData);
+    tokenData = newTokens;
+    await saveTokenToDB(newTokens);
     
     res.redirect(`${FRONTEND_URI}?success=true`);
   } catch (error) {
-    console.error('Error in callback:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
-    }
-    res.redirect(`${FRONTEND_URI}?error=invalid_token`);
+    console.error('Token exchange error:', error.response ? error.response.data : error.message);
+    res.redirect(`${FRONTEND_URI}?error=token_exchange_failed`);
   }
 });
 
-// API Routes
-// Status endpoint
+// Spotify API Routes with authentication middleware
 app.get('/api/spotify/status', async (req, res) => {
-  console.log('Status endpoint called');
-  
-  // Aktuellen Token-Status aus der Datenbank laden
-  if (!tokenData) {
-    tokenData = await loadTokenFromDB();
-  }
-  
   res.json({
     authenticated: !!tokenData,
-    tokenExpires: tokenData ? new Date(tokenData.expires_at).toISOString() : null,
-    timeRemaining: tokenData ? Math.floor((tokenData.expires_at - Date.now()) / 1000) + ' seconds' : null
+    hasRefreshToken: !!(tokenData && tokenData.refresh_token)
   });
 });
 
-// Route to get recent tracks
-app.get('/api/spotify/recent', async (req, res) => {
-  console.log('Recent tracks API called');
-  
+app.get('/api/spotify/recent', spotifyAuthMiddleware, async (req, res) => {
   try {
-    // Wenn kein Token im Speicher ist, aus der Datenbank laden
-    if (!tokenData) {
-      tokenData = await loadTokenFromDB();
-    }
-    
-    await checkAndRefreshToken();
-    
-    if (!tokenData || !tokenData.access_token) {
-      console.log('No token data available. Sending 401.');
-      return res.status(401).json({ error: 'Not authenticated with Spotify' });
-    }
-
-    console.log('Fetching recently played tracks from Spotify API');
     const response = await axios.get(`${SPOTIFY_API_BASE}/me/player/recently-played?limit=10`, {
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`
-      }
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
     });
-
-    console.log('Successfully fetched recently played tracks');
     res.json(response.data);
   } catch (error) {
-    console.error('Error fetching recent tracks:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-    }
+    console.error('Error fetching recent tracks:', error.response ? error.response.data : error.message);
     res.status(500).json({ error: 'Failed to fetch recent tracks' });
   }
 });
 
-// Route to get top tracks
-app.get('/api/spotify/top-tracks', async (req, res) => {
-  const timeRange = req.query.time_range || 'medium_term'; // short_term, medium_term, long_term
-  
-  console.log('Top tracks API called with time range:', timeRange);
+app.get('/api/spotify/top-tracks', spotifyAuthMiddleware, async (req, res) => {
+  const timeRange = req.query.time_range || 'medium_term';
   
   try {
-    // Wenn kein Token im Speicher ist, aus der Datenbank laden
-    if (!tokenData) {
-      tokenData = await loadTokenFromDB();
-    }
-    
-    await checkAndRefreshToken();
-    
-    if (!tokenData || !tokenData.access_token) {
-      console.log('No token data available. Sending 401.');
-      return res.status(401).json({ error: 'Not authenticated with Spotify' });
-    }
-
-    console.log('Fetching top tracks from Spotify API');
     const response = await axios.get(`${SPOTIFY_API_BASE}/me/top/tracks?limit=10&time_range=${timeRange}`, {
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`
-      }
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
     });
-
-    console.log('Successfully fetched top tracks');
     res.json(response.data);
   } catch (error) {
-    console.error('Error fetching top tracks:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-    }
+    console.error('Error fetching top tracks:', error.response ? error.response.data : error.message);
     res.status(500).json({ error: 'Failed to fetch top tracks' });
   }
 });
 
-// Route to get currently playing
-app.get('/api/spotify/now-playing', async (req, res) => {
-  console.log('Now playing API called');
-  
+app.get('/api/spotify/now-playing', spotifyAuthMiddleware, async (req, res) => {
   try {
-    // Wenn kein Token im Speicher ist, aus der Datenbank laden
-    if (!tokenData) {
-      tokenData = await loadTokenFromDB();
-    }
-    
-    await checkAndRefreshToken();
-    
-    if (!tokenData || !tokenData.access_token) {
-      console.log('No token data available. Sending 401.');
-      return res.status(401).json({ error: 'Not authenticated with Spotify' });
-    }
-
-    console.log('Fetching currently playing track from Spotify API');
     const response = await axios.get(`${SPOTIFY_API_BASE}/me/player/currently-playing`, {
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`
-      }
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
     });
-
-    // If no track is playing, API returns 204 No Content
-    if (response.status === 204) {
-      console.log('No track currently playing (204 response)');
-      return res.json({ isPlaying: false });
-    }
-
-    console.log('Successfully fetched currently playing track');
-    res.json({
-      isPlaying: response.data.is_playing,
+    
+    res.json(response.data.is_playing ? {
+      isPlaying: true,
       track: response.data.item
-    });
+    } : { isPlaying: false });
   } catch (error) {
-    console.error('Error fetching currently playing:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-    }
+    console.error('Error fetching now playing:', error.response ? error.response.data : error.message);
     res.status(500).json({ error: 'Failed to fetch currently playing track' });
   }
 });
-
-// Helper function to refresh token
-async function checkAndRefreshToken() {
-  if (!tokenData) {
-    console.log('No token data to refresh');
-    return;
-  }
-
-  const timeLeft = (tokenData.expires_at - Date.now()) / 1000;
-  console.log(`Token expires in ${timeLeft.toFixed(2)} seconds`);
-  
-  // If token is expired or about to expire in the next minute
-  if (Date.now() >= tokenData.expires_at - 60000) {
-    console.log('Token expired or expiring soon, refreshing...');
-    
-    try {
-      console.log('Using refresh token:', tokenData.refresh_token ? 'present' : 'missing');
-      
-      const response = await axios.post(
-        SPOTIFY_TOKEN_URL,
-        querystring.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: tokenData.refresh_token
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`
-          }
-        }
-      );
-
-      console.log('Token refresh successful!');
-      
-      tokenData = {
-        access_token: response.data.access_token,
-        refresh_token: response.data.refresh_token || tokenData.refresh_token,
-        expires_in: response.data.expires_in,
-        expires_at: Date.now() + (response.data.expires_in * 1000)
-      };
-      
-      console.log('Updated token data, expires at:', new Date(tokenData.expires_at).toISOString());
-      
-      // Token in der Datenbank aktualisieren
-      await saveTokenToDB(tokenData);
-    } catch (error) {
-      console.error('Error refreshing token:', error.message);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-      }
-      // Token-Daten auf null setzen, damit kein weiterer Zugriff versucht wird
-      tokenData = null;
-    }
-  } else {
-    console.log('Token still valid, no refresh needed');
-  }
-}
-
-// Helper function to generate random string
-function generateRandomString(length) {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < length; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
 
 // Catch-all route - MUST be last
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../index.html'));
 });
 
-// Starten Sie den Server
+// Start the server
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
 
-// Verbindung bei Beendigung sauber schließen
+// Close MongoDB connection on server exit
 process.on('SIGINT', async () => {
   if (mongoClient) {
     console.log('Closing MongoDB connection');
